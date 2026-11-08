@@ -1,0 +1,63 @@
+version: "3.9"
+
+services:
+  postgres:
+    image: postgres:16
+    container_name: fs_postgres
+    environment:
+      POSTGRES_USER: fs_user
+      POSTGRES_PASSWORD: fs_pass
+      POSTGRES_DB: feature_store
+    ports:
+      - "5432:5432"
+    volumes:
+      - pg_data:/var/lib/postgresql/data
+      - ./scripts/init_db.sql:/docker-entrypoint-initdb.d/init_db.sql
+
+  redis:
+    image: redis:7
+    container_name: fs_redis
+    ports:
+      - "6379:6379"
+
+  # Redpanda = a Kafka-API-compatible streaming broker that runs as a single
+  # lightweight container. Using this instead of real Kafka+Zookeeper saves you
+  # days of local-dev pain; you can honestly say in an interview "I used
+  # Redpanda for local dev to avoid ZK overhead, but the code speaks the Kafka
+  # protocol so it's a drop-in swap for MSK/Confluent in production."
+  redpanda:
+    image: docker.redpanda.com/redpandadata/redpanda:v24.1.1
+    container_name: fs_redpanda
+    command:
+      - redpanda
+      - start
+      - --smp=1
+      - --memory=512M
+      - --reserve-memory=0M
+      - --overprovisioned
+      - --node-id=0
+      - --check=false
+      - --kafka-addr=PLAINTEXT://0.0.0.0:9092
+      - --advertise-kafka-addr=PLAINTEXT://redpanda:9092
+    ports:
+      - "9092:9092"
+
+  api:
+    build: .
+    container_name: fs_api
+    depends_on:
+      - postgres
+      - redis
+      - redpanda
+    environment:
+      DATABASE_URL: postgresql://fs_user:fs_pass@postgres:5432/feature_store
+      REDIS_URL: redis://redis:6379/0
+      KAFKA_BOOTSTRAP: redpanda:9092
+    ports:
+      - "8000:8000"
+    volumes:
+      - ./app:/app/app
+    command: uvicorn app.main:app --host 0.0.0.0 --port 8000 --workers 4
+
+volumes:
+  pg_data:
